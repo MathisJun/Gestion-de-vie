@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { addMonths, addYears } from 'date-fns';
 import { getDefaultHousehold } from '@/lib/utils/get-household';
 
 // AUTHENTIFICATION TEMPORAIREMENT DÉSACTIVÉE
@@ -8,12 +7,12 @@ export async function GET() {
   try {
     const household = await getDefaultHousehold();
 
-    const subscriptions = await prisma.subscription.findMany({
+    const movies = await prisma.movie.findMany({
       where: { householdId: household.id },
-      orderBy: { nextRenewal: 'asc' },
+      orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ subscriptions });
+    return NextResponse.json({ movies });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -27,46 +26,43 @@ export async function POST(request: Request) {
     const household = await getDefaultHousehold();
 
     const body = await request.json();
-    const {
-      name,
-      provider,
-      billingCycle,
-      price,
-      startDate,
-      endDate,
-      paymentMethod,
-      notes,
-    } = body;
+    const { name, title, year, status, rating, notes, movies } = body;
 
-    if (!name || !billingCycle || !price || !startDate) {
+    // Support for bulk import
+    if (movies && Array.isArray(movies)) {
+      const createdMovies = await prisma.movie.createMany({
+        data: movies.map((m: any) => ({
+          householdId: household.id,
+          title: m.title || m.name,
+          year: m.year ? parseInt(m.year) : null,
+          status: m.status || 'TO_WATCH',
+          rating: m.rating ? parseInt(m.rating) : null,
+          notes: m.notes || null,
+        })),
+      });
+      return NextResponse.json({ count: createdMovies.count }, { status: 201 });
+    }
+
+    // Single movie creation
+    if (!title && !name) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Title is required' },
         { status: 400 }
       );
     }
 
-    const start = new Date(startDate);
-    const nextRenewal =
-      billingCycle === 'monthly'
-        ? addMonths(start, 1)
-        : addYears(start, 1);
-
-    const subscription = await prisma.subscription.create({
+    const movie = await prisma.movie.create({
       data: {
         householdId: household.id,
-        name,
-        provider: provider || null,
-        billingCycle,
-        price: parseFloat(price),
-        startDate: start,
-        endDate: endDate ? new Date(endDate) : null,
-        nextRenewal,
-        paymentMethod: paymentMethod || null,
+        title: title || name,
+        year: year ? parseInt(year) : null,
+        status: status || 'TO_WATCH',
+        rating: rating ? parseInt(rating) : null,
         notes: notes || null,
       },
     });
 
-    return NextResponse.json(subscription, { status: 201 });
+    return NextResponse.json(movie, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -84,7 +80,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Id is required' }, { status: 400 });
     }
 
-    await prisma.subscription.delete({
+    await prisma.movie.delete({
       where: { id },
     });
 
@@ -96,3 +92,4 @@ export async function DELETE(request: Request) {
     );
   }
 }
+

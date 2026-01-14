@@ -2,10 +2,9 @@
 
 import { use, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/Button';
 import { showToast } from '@/components/ui/Toast';
-import { Plus, MapPin, Upload, Trash2 } from 'lucide-react';
+import { Plus, MapPin, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { format } from 'date-fns';
@@ -18,14 +17,14 @@ interface Trip {
   title: string;
   country: string | null;
   city: string | null;
-  start_date: string | null;
-  end_date: string | null;
+  startDate: string | null;
+  endDate: string | null;
   description: string | null;
 }
 
 interface TripSpot {
   id: string;
-  trip_id: string;
+  tripId: string;
   title: string;
   lat: number;
   lng: number;
@@ -35,9 +34,9 @@ interface TripSpot {
 
 interface TripMedia {
   id: string;
-  spot_id: string;
-  storage_path: string;
-  media_type: 'image' | 'video';
+  spotId: string;
+  storagePath: string;
+  mediaType: 'image' | 'video';
 }
 
 export default function TripDetailPage({
@@ -47,56 +46,60 @@ export default function TripDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const supabase = createClient();
   const [showAddSpotModal, setShowAddSpotModal] = useState(false);
 
-  const { data: trip } = useQuery<Trip>({
+  const { data: tripData, isLoading: tripLoading, error: tripError } = useQuery<{ trip: Trip & { spots: any[] } }>({
     queryKey: ['trip', id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('trips')
-        .select('*')
-        .eq('id', id)
-        .single();
-      if (error) throw error;
-      return data;
+      const response = await fetch(`/api/trips/${id}`);
+      if (!response.ok) {
+        if (response.status === 404) throw new Error('Voyage non trouvé');
+        throw new Error('Erreur lors du chargement');
+      }
+      return response.json();
     },
   });
 
-  const { data: spots = [] } = useQuery<TripSpot[]>({
-    queryKey: ['trip-spots', id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('trip_spots')
-        .select('*')
-        .eq('trip_id', id)
-        .order('created_at', { ascending: false });
-      return data || [];
-    },
-    enabled: !!id,
-  });
+  const trip = tripData?.trip;
+  const spots: TripSpot[] = trip?.spots?.map((spot: any) => ({
+    id: spot.id,
+    tripId: spot.tripId,
+    title: spot.title,
+    lat: Number(spot.lat),
+    lng: Number(spot.lng),
+    description: spot.description,
+    media: spot.media?.map((m: any) => ({
+      id: m.id,
+      spotId: m.spotId,
+      storagePath: m.storagePath,
+      mediaType: m.mediaType,
+    })) || [],
+  })) || [];
 
-  const { data: spotsWithMedia = [] } = useQuery<TripSpot[]>({
-    queryKey: ['trip-spots-media', spots],
-    queryFn: async () => {
-      const spotIds = spots.map((s) => s.id);
-      if (spotIds.length === 0) return [];
+  if (tripLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Chargement...</p>
+        </div>
+      </div>
+    );
+  }
 
-      const { data: media } = await supabase
-        .from('trip_media')
-        .select('*')
-        .in('spot_id', spotIds);
-
-      return spots.map((spot) => ({
-        ...spot,
-        media: media?.filter((m) => m.spot_id === spot.id) || [],
-      }));
-    },
-    enabled: spots.length > 0,
-  });
-
-  if (!trip) {
-    return <div>Chargement...</div>;
+  if (tripError || !trip) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <p className="text-gray-600 mb-4">
+            {tripError?.message || 'Voyage non trouvé'}
+          </p>
+          <Button onClick={() => router.push('/app/trips')}>
+            Retour aux voyages
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -116,11 +119,11 @@ export default function TripDetailPage({
               {[trip.city, trip.country].filter(Boolean).join(', ')}
             </p>
           )}
-          {trip.start_date && (
+          {trip.startDate && (
             <p className="text-sm text-gray-500 mt-1">
-              {format(new Date(trip.start_date), 'd MMMM yyyy', { locale: fr })}
-              {trip.end_date &&
-                ` - ${format(new Date(trip.end_date), 'd MMMM yyyy', {
+              {format(new Date(trip.startDate), 'd MMMM yyyy', { locale: fr })}
+              {trip.endDate &&
+                ` - ${format(new Date(trip.endDate), 'd MMMM yyyy', {
                   locale: fr,
                 })}`}
             </p>
@@ -136,18 +139,18 @@ export default function TripDetailPage({
         <p className="text-gray-700">{trip.description}</p>
       )}
 
-      {spotsWithMedia.length > 0 && (
+      {spots.length > 0 && (
         <div className="h-[400px] rounded-lg overflow-hidden border border-gray-200">
-          <Map spots={spotsWithMedia} />
+          <Map spots={spots} />
         </div>
       )}
 
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Spots</h2>
-        {spotsWithMedia.length === 0 ? (
+        {spots.length === 0 ? (
           <p className="text-gray-500">Aucun spot ajouté</p>
         ) : (
-          spotsWithMedia.map((spot) => (
+          spots.map((spot) => (
             <SpotCard key={spot.id} spot={spot} tripId={id} />
           ))
         )}
@@ -165,19 +168,24 @@ export default function TripDetailPage({
 
 function SpotCard({ spot, tripId }: { spot: TripSpot; tripId: string }) {
   const queryClient = useQueryClient();
-  const supabase = createClient();
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from('trip_spots')
-        .delete()
-        .eq('id', spot.id);
-      if (error) throw error;
+      const response = await fetch(`/api/trips/spots?id=${spot.id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete spot');
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['trip-spots'] });
+      queryClient.invalidateQueries({ queryKey: ['trip-spots', tripId] });
+      queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
       showToast('Spot supprimé', 'success');
+    },
+    onError: (error: any) => {
+      showToast(error.message || 'Erreur lors de la suppression', 'error');
     },
   });
 
@@ -216,26 +224,14 @@ function SpotCard({ spot, tripId }: { spot: TripSpot; tripId: string }) {
 }
 
 function MediaPreview({ media }: { media: TripMedia }) {
-  const supabase = createClient();
-  const { data: url } = useQuery({
-    queryKey: ['media-url', media.storage_path],
-    queryFn: async () => {
-      const { data } = await supabase.storage
-        .from('trip-media')
-        .createSignedUrl(media.storage_path, 3600);
-      return data?.signedUrl;
-    },
-  });
-
-  if (!url) return null;
-
+  // Note: L'upload de médias nécessite un service de stockage (S3, Cloudinary, etc.)
+  // Pour l'instant, on affiche juste un placeholder
   return (
-    <div className="aspect-square rounded overflow-hidden bg-gray-100">
-      {media.media_type === 'image' ? (
-        <img src={url} alt="" className="w-full h-full object-cover" />
-      ) : (
-        <video src={url} className="w-full h-full object-cover" controls />
-      )}
+    <div className="aspect-square rounded overflow-hidden bg-gray-100 flex items-center justify-center">
+      <div className="text-center text-gray-400">
+        <p className="text-xs">{media.mediaType === 'image' ? '📷' : '🎥'}</p>
+        <p className="text-xs mt-1">Média</p>
+      </div>
     </div>
   );
 }
@@ -252,21 +248,28 @@ function SpotForm({
   const [lng, setLng] = useState('');
   const [description, setDescription] = useState('');
   const queryClient = useQueryClient();
-  const supabase = createClient();
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from('trip_spots').insert({
-        trip_id: tripId,
-        title,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
-        description: description || null,
+      const response = await fetch('/api/trips/spots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tripId,
+          title,
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          description: description || null,
+        }),
       });
-      if (error) throw error;
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create spot');
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['trip-spots'] });
+      queryClient.invalidateQueries({ queryKey: ['trip-spots', tripId] });
+      queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
       onClose();
       showToast('Spot ajouté', 'success');
     },

@@ -197,10 +197,10 @@ model Restaurant {
 }
 
 enum PriceLevel {
-  €
-  €€
-  €€€
-  €€€€
+  ONE_EURO
+  TWO_EURO
+  THREE_EURO
+  FOUR_EURO
 }
 
 model Movie {

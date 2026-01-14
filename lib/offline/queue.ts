@@ -1,4 +1,4 @@
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
+import { openDB, IDBPDatabase } from 'idb';
 
 interface OfflineAction {
   id: string;
@@ -8,28 +8,16 @@ interface OfflineAction {
   synced: boolean;
 }
 
-interface GroceryDB extends DBSchema {
-  offlineQueue: {
-    key: string;
-    value: OfflineAction;
-    indexes: { synced: boolean };
-  };
-  groceryItems: {
-    key: string;
-    value: any;
-  };
-}
-
-let db: IDBPDatabase<GroceryDB> | null = null;
+let db: IDBPDatabase | null = null;
 
 export async function getDB() {
   if (!db) {
-    db = await openDB<GroceryDB>('grocery-app', 1, {
+    db = await openDB('grocery-app', 1, {
       upgrade(db) {
         const queueStore = db.createObjectStore('offlineQueue', {
           keyPath: 'id',
         });
-        queueStore.createIndex('synced', 'synced');
+        queueStore.createIndex('by-synced', 'synced');
 
         db.createObjectStore('groceryItems', { keyPath: 'id' });
       },
@@ -49,9 +37,14 @@ export async function addToQueue(action: Omit<OfflineAction, 'id' | 'synced'>) {
   return id;
 }
 
-export async function getPendingActions() {
+export async function getPendingActions(): Promise<OfflineAction[]> {
   const database = await getDB();
-  return database.getAllFromIndex('offlineQueue', 'synced', false);
+  const tx = database.transaction('offlineQueue', 'readonly');
+  const store = tx.objectStore('offlineQueue');
+  const index = store.index('by-synced');
+  const all = await index.getAll(IDBKeyRange.only(false));
+  await tx.done;
+  return all;
 }
 
 export async function markAsSynced(id: string) {
@@ -66,9 +59,9 @@ export async function clearSyncedActions() {
   const database = await getDB();
   const tx = database.transaction('offlineQueue', 'readwrite');
   const store = tx.objectStore('offlineQueue');
-  const index = store.index('synced');
+  const index = store.index('by-synced');
   
-  let cursor = await index.openCursor(true);
+  let cursor = await index.openCursor(IDBKeyRange.only(true));
   while (cursor) {
     await cursor.delete();
     cursor = await cursor.continue();

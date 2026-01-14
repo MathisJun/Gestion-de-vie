@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { addMonths, addYears } from 'date-fns';
 import { getDefaultHousehold } from '@/lib/utils/get-household';
 
 // AUTHENTIFICATION TEMPORAIREMENT DÉSACTIVÉE
@@ -8,12 +7,12 @@ export async function GET() {
   try {
     const household = await getDefaultHousehold();
 
-    const subscriptions = await prisma.subscription.findMany({
+    const entries = await prisma.fuelEntry.findMany({
       where: { householdId: household.id },
-      orderBy: { nextRenewal: 'asc' },
+      orderBy: { date: 'desc' },
     });
 
-    return NextResponse.json({ subscriptions });
+    return NextResponse.json({ entries });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -27,46 +26,27 @@ export async function POST(request: Request) {
     const household = await getDefaultHousehold();
 
     const body = await request.json();
-    const {
-      name,
-      provider,
-      billingCycle,
-      price,
-      startDate,
-      endDate,
-      paymentMethod,
-      notes,
-    } = body;
+    const { date, odometerKm, liters, totalPrice, station } = body;
 
-    if (!name || !billingCycle || !price || !startDate) {
+    if (!date || odometerKm === undefined || liters === undefined || totalPrice === undefined) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Date, odometerKm, liters, and totalPrice are required' },
         { status: 400 }
       );
     }
 
-    const start = new Date(startDate);
-    const nextRenewal =
-      billingCycle === 'monthly'
-        ? addMonths(start, 1)
-        : addYears(start, 1);
-
-    const subscription = await prisma.subscription.create({
+    const entry = await prisma.fuelEntry.create({
       data: {
         householdId: household.id,
-        name,
-        provider: provider || null,
-        billingCycle,
-        price: parseFloat(price),
-        startDate: start,
-        endDate: endDate ? new Date(endDate) : null,
-        nextRenewal,
-        paymentMethod: paymentMethod || null,
-        notes: notes || null,
+        date: new Date(date),
+        odometerKm: parseFloat(odometerKm),
+        liters: parseFloat(liters),
+        totalPrice: parseFloat(totalPrice),
+        station: station || null,
       },
     });
 
-    return NextResponse.json(subscription, { status: 201 });
+    return NextResponse.json(entry, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -84,7 +64,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Id is required' }, { status: 400 });
     }
 
-    await prisma.subscription.delete({
+    await prisma.fuelEntry.delete({
       where: { id },
     });
 
@@ -96,3 +76,4 @@ export async function DELETE(request: Request) {
     );
   }
 }
+

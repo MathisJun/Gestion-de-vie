@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { addMonths, addYears } from 'date-fns';
 import { getDefaultHousehold } from '@/lib/utils/get-household';
 
 // AUTHENTIFICATION TEMPORAIREMENT DÉSACTIVÉE
@@ -8,12 +7,12 @@ export async function GET() {
   try {
     const household = await getDefaultHousehold();
 
-    const subscriptions = await prisma.subscription.findMany({
+    const trips = await prisma.trip.findMany({
       where: { householdId: household.id },
-      orderBy: { nextRenewal: 'asc' },
+      orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ subscriptions });
+    return NextResponse.json({ trips });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -27,46 +26,28 @@ export async function POST(request: Request) {
     const household = await getDefaultHousehold();
 
     const body = await request.json();
-    const {
-      name,
-      provider,
-      billingCycle,
-      price,
-      startDate,
-      endDate,
-      paymentMethod,
-      notes,
-    } = body;
+    const { title, country, city, startDate, endDate, description } = body;
 
-    if (!name || !billingCycle || !price || !startDate) {
+    if (!title) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Title is required' },
         { status: 400 }
       );
     }
 
-    const start = new Date(startDate);
-    const nextRenewal =
-      billingCycle === 'monthly'
-        ? addMonths(start, 1)
-        : addYears(start, 1);
-
-    const subscription = await prisma.subscription.create({
+    const trip = await prisma.trip.create({
       data: {
         householdId: household.id,
-        name,
-        provider: provider || null,
-        billingCycle,
-        price: parseFloat(price),
-        startDate: start,
+        title,
+        country: country || null,
+        city: city || null,
+        startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
-        nextRenewal,
-        paymentMethod: paymentMethod || null,
-        notes: notes || null,
+        description: description || null,
       },
     });
 
-    return NextResponse.json(subscription, { status: 201 });
+    return NextResponse.json(trip, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -84,7 +65,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Id is required' }, { status: 400 });
     }
 
-    await prisma.subscription.delete({
+    await prisma.trip.delete({
       where: { id },
     });
 
@@ -96,3 +77,4 @@ export async function DELETE(request: Request) {
     );
   }
 }
+

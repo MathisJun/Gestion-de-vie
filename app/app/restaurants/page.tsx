@@ -2,12 +2,15 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { createClient } from '@/lib/supabase/client';
 import { useHousehold } from '@/lib/hooks/use-household';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { MaterialIcon } from '@/components/ui/MaterialIcon';
 import { showToast } from '@/components/ui/Toast';
-import { Plus, Trash2, MapPin, ExternalLink, Star } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { priceLevelToSymbol, symbolToPriceLevel, type PriceLevel } from '@/lib/utils/price-level';
 
 const RestaurantsMap = dynamic(() => import('@/components/map/RestaurantsMap'), {
   ssr: false,
@@ -21,9 +24,9 @@ interface Restaurant {
   lng: number | null;
   rating: number | null;
   cuisine: string | null;
-  price_level: '€' | '€€' | '€€€' | '€€€€' | null;
+  priceLevel: PriceLevel | null;
   notes: string | null;
-  google_maps_url: string | null;
+  googleMapsUrl: string | null;
 }
 
 export default function RestaurantsPage() {
@@ -32,35 +35,38 @@ export default function RestaurantsPage() {
   const [filterCuisine, setFilterCuisine] = useState<string>('');
   const [filterRating, setFilterRating] = useState<number | null>(null);
   const queryClient = useQueryClient();
-  const supabase = createClient();
   const { data: householdData } = useHousehold();
-  const householdId = householdData?.household_id as string | undefined;
 
-  const { data: restaurants = [] } = useQuery<Restaurant[]>({
-    queryKey: ['restaurants', householdId],
+  const { data: restaurants = [], isLoading, error } = useQuery<Restaurant[]>({
+    queryKey: ['restaurants'],
     queryFn: async () => {
-      if (!householdId) return [];
-      const { data } = await supabase
-        .from('restaurants')
-        .select('*')
-        .eq('household_id', householdId)
-        .order('created_at', { ascending: false });
-      return data || [];
+      const response = await fetch('/api/restaurants');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch restaurants');
+      }
+      const data = await response.json();
+      return data.restaurants || [];
     },
-    enabled: !!householdId,
+    retry: 2,
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('restaurants')
-        .delete()
-        .eq('id', id);
-      if (error) throw error;
+      const response = await fetch(`/api/restaurants?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete restaurant');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['restaurants'] });
       showToast('Restaurant supprimé', 'success');
+    },
+    onError: (error: any) => {
+      showToast(error.message || 'Erreur lors de la suppression', 'error');
     },
   });
 
@@ -74,44 +80,80 @@ export default function RestaurantsPage() {
     return true;
   });
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 font-medium">Chargement des restaurants...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Card className="max-w-md w-full">
+          <CardContent className="p-8 text-center">
+            <MaterialIcon name="error" size={48} className="text-red-500 mx-auto mb-4" />
+            <p className="text-red-600 mb-4 font-medium">Erreur lors du chargement</p>
+            <Button onClick={() => queryClient.invalidateQueries({ queryKey: ['restaurants'] })}>
+              Réessayer
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Nos restaurants</h1>
-        <div className="flex gap-2">
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-1">Nos restaurants</h1>
+          <p className="text-gray-500">Découvrez vos restaurants favoris</p>
+        </div>
+        <div className="flex gap-3">
           <Button
-            variant="secondary"
+            variant="outline"
             onClick={() => setShowMap(!showMap)}
+            startIcon={<MaterialIcon name={showMap ? 'list' : 'map'} size={20} />}
           >
-            <MapPin className="h-4 w-4 mr-2" />
             {showMap ? 'Liste' : 'Carte'}
           </Button>
-          <Button onClick={() => setShowAddModal(true)}>
-            <Plus className="h-4 w-4 mr-2" />
+          <Button 
+            onClick={() => setShowAddModal(true)}
+            startIcon={<MaterialIcon name="add" size={20} />}
+          >
             Ajouter
           </Button>
         </div>
       </div>
 
-      <div className="flex gap-2 flex-wrap">
-        <select
-          value={filterCuisine}
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3">
+        <Select
+          value={filterCuisine || ''}
           onChange={(e) => setFilterCuisine(e.target.value)}
-          className="px-3 py-2 border rounded-lg"
+          startIcon={<MaterialIcon name="restaurant_menu" size={20} />}
+          className="min-w-[200px]"
         >
           <option value="">Toutes les cuisines</option>
           {cuisines.map((cuisine) => (
-            <option key={cuisine} value={cuisine}>
+            <option key={cuisine || 'unknown'} value={cuisine || ''}>
               {cuisine}
             </option>
           ))}
-        </select>
-        <select
+        </Select>
+        <Select
           value={filterRating || ''}
           onChange={(e) =>
             setFilterRating(e.target.value ? parseInt(e.target.value) : null)
           }
-          className="px-3 py-2 border rounded-lg"
+          startIcon={<MaterialIcon name="star" size={20} />}
+          className="min-w-[180px]"
         >
           <option value="">Toutes les notes</option>
           {[5, 4, 3, 2, 1].map((rating) => (
@@ -119,128 +161,136 @@ export default function RestaurantsPage() {
               {rating} étoile{rating > 1 ? 's' : ''}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
+      {/* Content */}
       {showMap ? (
-        <div className="h-[600px] rounded-lg overflow-hidden border border-gray-200">
-          <RestaurantsMap restaurants={filteredRestaurants} />
-        </div>
+        <Card>
+          <CardContent className="p-0">
+            <div className="h-[600px] rounded-2xl overflow-hidden">
+              <RestaurantsMap restaurants={filteredRestaurants} />
+            </div>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="grid gap-4">
           {filteredRestaurants.length === 0 ? (
-            <p className="text-gray-500">Aucun restaurant</p>
+            <Card>
+              <CardContent className="p-12 text-center">
+                <MaterialIcon name="restaurant" size={64} className="text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-500 font-medium text-lg">Aucun restaurant</p>
+                <p className="text-gray-400 text-sm mt-2">Commencez par ajouter votre premier restaurant</p>
+              </CardContent>
+            </Card>
           ) : (
             filteredRestaurants.map((restaurant) => (
-              <div
-                key={restaurant.id}
-                className="p-4 bg-white rounded-lg border border-gray-200"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-lg">{restaurant.name}</h3>
-                    {restaurant.address && (
-                      <p className="text-sm text-gray-600 mt-1 flex items-center gap-1">
-                        <MapPin className="h-4 w-4" />
-                        {restaurant.address}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-4 mt-2">
-                      {restaurant.rating && (
-                        <div className="flex items-center gap-1">
-                          <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
-                          <span className="text-sm">{restaurant.rating}/5</span>
-                        </div>
+              <Card key={restaurant.id} hover>
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-bold text-xl text-gray-900 mb-2">{restaurant.name}</h3>
+                      {restaurant.address && (
+                        <p className="text-sm text-gray-600 mb-3 flex items-center gap-2">
+                          <MaterialIcon name="location_on" size={18} className="text-gray-400 flex-shrink-0" />
+                          <span>{restaurant.address}</span>
+                        </p>
                       )}
-                      {restaurant.cuisine && (
-                        <span className="text-sm text-gray-600">
-                          {restaurant.cuisine}
-                        </span>
+                      <div className="flex flex-wrap items-center gap-4 mb-3">
+                        {restaurant.rating && (
+                          <div className="flex items-center gap-1.5">
+                            <MaterialIcon name="star" size={18} className="text-yellow-500" filled />
+                            <span className="text-sm font-medium text-gray-700">{restaurant.rating}/5</span>
+                          </div>
+                        )}
+                        {restaurant.cuisine && (
+                          <span className="text-sm text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                            {restaurant.cuisine}
+                          </span>
+                        )}
+                        {restaurant.priceLevel && (
+                          <span className="text-sm font-semibold text-gray-900">
+                            {priceLevelToSymbol(restaurant.priceLevel)}
+                          </span>
+                        )}
+                      </div>
+                      {restaurant.notes && (
+                        <p className="text-sm text-gray-700 mb-3 leading-relaxed">
+                          {restaurant.notes}
+                        </p>
                       )}
-                      {restaurant.price_level && (
-                        <span className="text-sm font-medium">
-                          {restaurant.price_level}
-                        </span>
+                      {restaurant.googleMapsUrl && (
+                        <a
+                          href={restaurant.googleMapsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium mt-2"
+                        >
+                          <MaterialIcon name="open_in_new" size={18} />
+                          Ouvrir dans Google Maps
+                        </a>
                       )}
                     </div>
-                    {restaurant.notes && (
-                      <p className="text-sm text-gray-700 mt-2">
-                        {restaurant.notes}
-                      </p>
-                    )}
-                    {restaurant.google_maps_url && (
-                      <a
-                        href={restaurant.google_maps_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 mt-2"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        Ouvrir dans Google Maps
-                      </a>
-                    )}
+                    <button
+                      onClick={() => {
+                        if (confirm('Supprimer ce restaurant ?')) {
+                          deleteMutation.mutate(restaurant.id);
+                        }
+                      }}
+                      className="p-2.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all duration-200 flex-shrink-0"
+                      title="Supprimer"
+                    >
+                      <MaterialIcon name="delete" size={20} />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => {
-                      if (confirm('Supprimer ce restaurant ?')) {
-                        deleteMutation.mutate(restaurant.id);
-                      }
-                    }}
-                    className="text-red-600 hover:text-red-700 p-2"
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </button>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             ))
           )}
         </div>
       )}
 
+      {/* Add Modal */}
       {showAddModal && (
-        <RestaurantForm
-          householdId={householdId!}
-          onClose={() => setShowAddModal(false)}
-        />
+        <RestaurantForm onClose={() => setShowAddModal(false)} />
       )}
     </div>
   );
 }
 
-function RestaurantForm({
-  householdId,
-  onClose,
-}: {
-  householdId: string;
-  onClose: () => void;
-}) {
+function RestaurantForm({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [lat, setLat] = useState('');
   const [lng, setLng] = useState('');
   const [rating, setRating] = useState('');
   const [cuisine, setCuisine] = useState('');
-  const [priceLevel, setPriceLevel] = useState<'€' | '€€' | '€€€' | '€€€€' | ''>('');
+  const [priceLevel, setPriceLevel] = useState<PriceLevel | ''>('');
   const [notes, setNotes] = useState('');
   const [googleMapsUrl, setGoogleMapsUrl] = useState('');
   const queryClient = useQueryClient();
-  const supabase = createClient();
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from('restaurants').insert({
-        household_id: householdId,
-        name,
-        address: address || null,
-        lat: lat ? parseFloat(lat) : null,
-        lng: lng ? parseFloat(lng) : null,
-        rating: rating ? parseInt(rating) : null,
-        cuisine: cuisine || null,
-        price_level: priceLevel || null,
-        notes: notes || null,
-        google_maps_url: googleMapsUrl || null,
+      const response = await fetch('/api/restaurants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          address: address || null,
+          lat: lat || null,
+          lng: lng || null,
+          rating: rating || null,
+          cuisine: cuisine || null,
+          priceLevel: priceLevel || null,
+          notes: notes || null,
+          googleMapsUrl: googleMapsUrl || null,
+        }),
       });
-      if (error) throw error;
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create restaurant');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['restaurants'] });
@@ -253,119 +303,111 @@ function RestaurantForm({
   });
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg p-6 max-w-md w-full space-y-4 max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold">Ajouter un restaurant</h2>
-        <div>
-          <label className="block text-sm font-medium mb-1">Nom *</label>
-          <input
-            type="text"
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+      <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MaterialIcon name="restaurant" size={24} className="text-primary-600" />
+            Ajouter un restaurant
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input
+            label="Nom *"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
             required
+            startIcon={<MaterialIcon name="label" size={20} />}
           />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Adresse</label>
-          <input
-            type="text"
+          <Input
+            label="Adresse"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
+            startIcon={<MaterialIcon name="location_on" size={20} />}
           />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Latitude</label>
-            <input
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Latitude"
               type="number"
               step="any"
               value={lat}
               onChange={(e) => setLat(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg"
+              startIcon={<MaterialIcon name="my_location" size={20} />}
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Longitude</label>
-            <input
+            <Input
+              label="Longitude"
               type="number"
               step="any"
               value={lng}
               onChange={(e) => setLng(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg"
+              startIcon={<MaterialIcon name="my_location" size={20} />}
             />
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Note (1-5)</label>
-            <input
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Note (1-5)"
               type="number"
               min="1"
               max="5"
               value={rating}
               onChange={(e) => setRating(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg"
+              startIcon={<MaterialIcon name="star" size={20} />}
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Prix</label>
-            <select
+            <Select
+              label="Prix"
               value={priceLevel}
-              onChange={(e) =>
-                setPriceLevel(e.target.value as '€' | '€€' | '€€€' | '€€€€' | '')
-              }
-              className="w-full px-3 py-2 border rounded-lg"
+              onChange={(e) => setPriceLevel(e.target.value as PriceLevel | '')}
+              startIcon={<MaterialIcon name="attach_money" size={20} />}
             >
               <option value="">Non spécifié</option>
-              <option value="€">€</option>
-              <option value="€€">€€</option>
-              <option value="€€€">€€€</option>
-              <option value="€€€€">€€€€</option>
-            </select>
+              <option value="ONE_EURO">€</option>
+              <option value="TWO_EURO">€€</option>
+              <option value="THREE_EURO">€€€</option>
+              <option value="FOUR_EURO">€€€€</option>
+            </Select>
           </div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Type de cuisine</label>
-          <input
-            type="text"
+          <Input
+            label="Type de cuisine"
             value={cuisine}
             onChange={(e) => setCuisine(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
             placeholder="Ex: Italienne"
+            startIcon={<MaterialIcon name="restaurant_menu" size={20} />}
           />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Lien Google Maps
-          </label>
-          <input
+          <Input
+            label="Lien Google Maps"
             type="url"
             value={googleMapsUrl}
             onChange={(e) => setGoogleMapsUrl(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
             placeholder="https://maps.google.com/..."
+            startIcon={<MaterialIcon name="link" size={20} />}
           />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Commentaire</label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
-            rows={3}
-          />
-        </div>
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={onClose}>
-            Annuler
-          </Button>
-          <Button onClick={() => createMutation.mutate()} disabled={!name}>
-            Ajouter
-          </Button>
-        </div>
-      </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Commentaire
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all duration-200 resize-none"
+              rows={3}
+              placeholder="Ajoutez vos notes..."
+            />
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" fullWidth onClick={onClose}>
+              Annuler
+            </Button>
+            <Button
+              fullWidth
+              onClick={() => createMutation.mutate()}
+              disabled={!name || createMutation.isPending}
+              startIcon={<MaterialIcon name="add" size={20} />}
+            >
+              {createMutation.isPending ? 'Ajout...' : 'Ajouter'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

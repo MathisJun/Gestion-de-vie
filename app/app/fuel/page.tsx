@@ -2,8 +2,6 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { createClient } from '@/lib/supabase/client';
-import { useHousehold } from '@/lib/hooks/use-household';
 import { Button } from '@/components/ui/Button';
 import { showToast } from '@/components/ui/Toast';
 import { Plus, Trash2, Download } from 'lucide-react';
@@ -23,9 +21,9 @@ import { fr } from 'date-fns/locale';
 interface FuelEntry {
   id: string;
   date: string;
-  odometer_km: number;
+  odometerKm: number;
   liters: number;
-  total_price: number;
+  totalPrice: number;
   station: string | null;
 }
 
@@ -37,35 +35,37 @@ interface FuelEntryWithConsumption extends FuelEntry {
 export default function FuelPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const queryClient = useQueryClient();
-  const supabase = createClient();
-  const { data: householdData } = useHousehold();
-  const householdId = householdData?.household_id as string | undefined;
 
-  const { data: entries = [] } = useQuery<FuelEntry[]>({
-    queryKey: ['fuel-entries', householdId],
+  const { data: entries = [], isLoading, error } = useQuery<FuelEntry[]>({
+    queryKey: ['fuel-entries'],
     queryFn: async () => {
-      if (!householdId) return [];
-      const { data } = await supabase
-        .from('fuel_entries')
-        .select('*')
-        .eq('household_id', householdId)
-        .order('date', { ascending: true });
-      return data || [];
+      const response = await fetch('/api/fuel');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch fuel entries');
+      }
+      const data = await response.json();
+      return data.entries || [];
     },
-    enabled: !!householdId,
+    retry: 2,
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('fuel_entries')
-        .delete()
-        .eq('id', id);
-      if (error) throw error;
+      const response = await fetch(`/api/fuel?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete fuel entry');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fuel-entries'] });
       showToast('Entrée supprimée', 'success');
+    },
+    onError: (error: any) => {
+      showToast(error.message || 'Erreur lors de la suppression', 'error');
     },
   });
 
@@ -75,9 +75,9 @@ export default function FuelPage() {
       if (index === 0) return { ...entry };
 
       const prevEntry = entries[index - 1];
-      const kmDiff = entry.odometer_km - prevEntry.odometer_km;
+      const kmDiff = entry.odometerKm - prevEntry.odometerKm;
       const consumption = (entry.liters / kmDiff) * 100;
-      const costPer100km = (entry.total_price / kmDiff) * 100;
+      const costPer100km = (entry.totalPrice / kmDiff) * 100;
 
       return {
         ...entry,
@@ -105,9 +105,9 @@ export default function FuelPage() {
     ];
     const rows = entriesWithStats.map((entry) => [
       entry.date,
-      entry.odometer_km,
+      entry.odometerKm,
       entry.liters,
-      entry.total_price,
+      entry.totalPrice,
       entry.station || '',
       entry.consumption || '',
       entry.costPer100km || '',
@@ -123,6 +123,30 @@ export default function FuelPage() {
     link.download = `consommation-essence-${format(new Date(), 'yyyy-MM-dd')}.csv`;
     link.click();
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Chargement des données...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">Erreur lors du chargement</p>
+          <Button onClick={() => queryClient.invalidateQueries({ queryKey: ['fuel-entries'] })}>
+            Réessayer
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -220,7 +244,7 @@ export default function FuelPage() {
                         <div>
                           <p className="text-sm text-gray-600">Kilométrage</p>
                           <p className="font-medium">
-                            {entry.odometer_km.toFixed(0)} km
+                            {entry.odometerKm.toFixed(0)} km
                           </p>
                         </div>
                         <div>
@@ -230,7 +254,7 @@ export default function FuelPage() {
                         <div>
                           <p className="text-sm text-gray-600">Prix</p>
                           <p className="font-medium">
-                            {entry.total_price.toFixed(2)} €
+                            {entry.totalPrice.toFixed(2)} €
                           </p>
                         </div>
                         {entry.consumption && (
@@ -269,7 +293,6 @@ export default function FuelPage() {
 
       {showAddModal && (
         <FuelEntryForm
-          householdId={householdId!}
           onClose={() => setShowAddModal(false)}
         />
       )}
@@ -278,10 +301,8 @@ export default function FuelPage() {
 }
 
 function FuelEntryForm({
-  householdId,
   onClose,
 }: {
-  householdId: string;
   onClose: () => void;
 }) {
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -290,19 +311,24 @@ function FuelEntryForm({
   const [totalPrice, setTotalPrice] = useState('');
   const [station, setStation] = useState('');
   const queryClient = useQueryClient();
-  const supabase = createClient();
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from('fuel_entries').insert({
-        household_id: householdId,
-        date,
-        odometer_km: parseFloat(odometerKm),
-        liters: parseFloat(liters),
-        total_price: parseFloat(totalPrice),
-        station: station || null,
+      const response = await fetch('/api/fuel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date,
+          odometerKm: parseFloat(odometerKm),
+          liters: parseFloat(liters),
+          totalPrice: parseFloat(totalPrice),
+          station: station || null,
+        }),
       });
-      if (error) throw error;
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create fuel entry');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fuel-entries'] });

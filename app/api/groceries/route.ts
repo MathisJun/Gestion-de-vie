@@ -1,27 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getDefaultHousehold } from '@/lib/utils/get-household';
 
+// AUTHENTIFICATION TEMPORAIREMENT DÉSACTIVÉE
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Get user's household
-    const member = await prisma.householdMember.findFirst({
-      where: { userId: session.user.id },
-    });
-
-    if (!member) {
-      return NextResponse.json({ items: [], categories: [], list: null });
-    }
+    const household = await getDefaultHousehold();
 
     // Get grocery list
     const list = await prisma.groceryList.findFirst({
-      where: { householdId: member.householdId },
+      where: { householdId: household.id },
     });
 
     if (!list) {
@@ -36,7 +24,7 @@ export async function GET() {
         orderBy: { createdAt: 'desc' },
       }),
       prisma.groceryCategory.findMany({
-        where: { householdId: member.householdId },
+        where: { householdId: household.id },
         orderBy: { name: 'asc' },
       }),
     ]);
@@ -52,11 +40,6 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body = await request.json();
     const { name, quantity, categoryId, listId } = body;
 
@@ -89,11 +72,6 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body = await request.json();
     const { id, status } = body;
 
@@ -111,6 +89,28 @@ export async function PATCH(request: Request) {
     });
 
     return NextResponse.json(item);
+  } catch (error) {
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ error: 'Id is required' }, { status: 400 });
+    }
+
+    await prisma.groceryItem.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error' },

@@ -2,8 +2,6 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { createClient } from '@/lib/supabase/client';
-import { useHousehold } from '@/lib/hooks/use-household';
 import { Button } from '@/components/ui/Button';
 import { showToast } from '@/components/ui/Toast';
 import { Plus, Trash2, AlertCircle } from 'lucide-react';
@@ -14,12 +12,12 @@ interface Subscription {
   id: string;
   name: string;
   provider: string | null;
-  billing_cycle: 'monthly' | 'yearly';
+  billingCycle: 'monthly' | 'yearly';
   price: number;
-  start_date: string;
-  end_date: string | null;
-  next_renewal: string | null;
-  payment_method: string | null;
+  startDate: string;
+  endDate: string | null;
+  nextRenewal: string | null;
+  paymentMethod: string | null;
   notes: string | null;
 }
 
@@ -27,52 +25,54 @@ export default function SubscriptionsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [filter, setFilter] = useState<'all' | 'active' | 'expired'>('all');
   const queryClient = useQueryClient();
-  const supabase = createClient();
-  const { data: householdData } = useHousehold();
-  const householdId = householdData?.household_id as string | undefined;
 
-  const { data: subscriptions = [] } = useQuery<Subscription[]>({
-    queryKey: ['subscriptions', householdId],
+  const { data: subscriptions = [], isLoading, error } = useQuery<Subscription[]>({
+    queryKey: ['subscriptions'],
     queryFn: async () => {
-      if (!householdId) return [];
-      const { data } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('household_id', householdId)
-        .order('next_renewal', { ascending: true });
-      return data || [];
+      const response = await fetch('/api/subscriptions');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch subscriptions');
+      }
+      const data = await response.json();
+      return data.subscriptions || [];
     },
-    enabled: !!householdId,
+    retry: 2,
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('subscriptions')
-        .delete()
-        .eq('id', id);
-      if (error) throw error;
+      const response = await fetch(`/api/subscriptions?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete subscription');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       showToast('Abonnement supprimé', 'success');
     },
+    onError: (error: any) => {
+      showToast(error.message || 'Erreur lors de la suppression', 'error');
+    },
   });
 
   const filteredSubscriptions = subscriptions.filter((sub) => {
     if (filter === 'active') {
-      return !sub.end_date || isBefore(new Date(), new Date(sub.end_date));
+      return !sub.endDate || isBefore(new Date(), new Date(sub.endDate));
     }
     if (filter === 'expired') {
-      return sub.end_date && isBefore(new Date(sub.end_date), new Date());
+      return sub.endDate && isBefore(new Date(sub.endDate), new Date());
     }
     return true;
   });
 
   const totalMonthly = subscriptions
-    .filter((sub) => !sub.end_date || isBefore(new Date(), new Date(sub.end_date)))
+    .filter((sub) => !sub.endDate || isBefore(new Date(), new Date(sub.endDate)))
     .reduce((sum, sub) => {
-      const monthly = sub.billing_cycle === 'monthly' ? sub.price : sub.price / 12;
+      const monthly = sub.billingCycle === 'monthly' ? sub.price : sub.price / 12;
       return sum + Number(monthly);
     }, 0);
 
@@ -81,6 +81,30 @@ export default function SubscriptionsPage() {
     const daysUntil = differenceInDays(new Date(date), new Date());
     return daysUntil <= 7 && daysUntil >= 0;
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Chargement des abonnements...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">Erreur lors du chargement</p>
+          <Button onClick={() => queryClient.invalidateQueries({ queryKey: ['subscriptions'] })}>
+            Réessayer
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -129,7 +153,7 @@ export default function SubscriptionsPage() {
             <div
               key={sub.id}
               className={`p-4 bg-white rounded-lg border ${
-                isRenewalSoon(sub.next_renewal)
+                isRenewalSoon(sub.nextRenewal)
                   ? 'border-yellow-300 bg-yellow-50'
                   : 'border-gray-200'
               }`}
@@ -138,7 +162,7 @@ export default function SubscriptionsPage() {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-lg">{sub.name}</h3>
-                    {isRenewalSoon(sub.next_renewal) && (
+                    {isRenewalSoon(sub.nextRenewal) && (
                       <AlertCircle className="h-5 w-5 text-yellow-600" />
                     )}
                   </div>
@@ -148,26 +172,26 @@ export default function SubscriptionsPage() {
                   <div className="mt-2 space-y-1">
                     <p className="text-sm">
                       <span className="font-medium">Prix:</span> {sub.price}€ /{' '}
-                      {sub.billing_cycle === 'monthly' ? 'mois' : 'an'}
+                      {sub.billingCycle === 'monthly' ? 'mois' : 'an'}
                     </p>
-                    {sub.next_renewal && (
+                    {sub.nextRenewal && (
                       <p className="text-sm">
                         <span className="font-medium">Prochain renouvellement:</span>{' '}
-                        {format(new Date(sub.next_renewal), 'd MMMM yyyy', {
+                        {format(new Date(sub.nextRenewal), 'd MMMM yyyy', {
                           locale: fr,
                         })}
-                        {isRenewalSoon(sub.next_renewal) && (
+                        {isRenewalSoon(sub.nextRenewal) && (
                           <span className="text-yellow-600 ml-2">
-                            (dans {differenceInDays(new Date(sub.next_renewal), new Date())}{' '}
+                            (dans {differenceInDays(new Date(sub.nextRenewal), new Date())}{' '}
                             jours)
                           </span>
                         )}
                       </p>
                     )}
-                    {sub.payment_method && (
+                    {sub.paymentMethod && (
                       <p className="text-sm">
                         <span className="font-medium">Moyen de paiement:</span>{' '}
-                        {sub.payment_method}
+                        {sub.paymentMethod}
                       </p>
                     )}
                     {sub.notes && (
@@ -195,7 +219,6 @@ export default function SubscriptionsPage() {
 
       {showAddModal && (
         <SubscriptionForm
-          householdId={householdId!}
           onClose={() => setShowAddModal(false)}
         />
       )}
@@ -204,10 +227,8 @@ export default function SubscriptionsPage() {
 }
 
 function SubscriptionForm({
-  householdId,
   onClose,
 }: {
-  householdId: string;
   onClose: () => void;
 }) {
   const [name, setName] = useState('');
@@ -221,29 +242,27 @@ function SubscriptionForm({
   const [paymentMethod, setPaymentMethod] = useState('');
   const [notes, setNotes] = useState('');
   const queryClient = useQueryClient();
-  const supabase = createClient();
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const start = new Date(startDate);
-      const nextRenewal =
-        billingCycle === 'monthly'
-          ? addMonths(start, 1)
-          : addYears(start, 1);
-
-      const { error } = await supabase.from('subscriptions').insert({
-        household_id: householdId,
-        name,
-        provider: provider || null,
-        billing_cycle: billingCycle,
-        price: parseFloat(price),
-        start_date: startDate,
-        end_date: endDate || null,
-        next_renewal: format(nextRenewal, 'yyyy-MM-dd'),
-        payment_method: paymentMethod || null,
-        notes: notes || null,
+      const response = await fetch('/api/subscriptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          provider: provider || null,
+          billingCycle,
+          price: parseFloat(price),
+          startDate,
+          endDate: endDate || null,
+          paymentMethod: paymentMethod || null,
+          notes: notes || null,
+        }),
       });
-      if (error) throw error;
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create subscription');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
